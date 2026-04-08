@@ -80,11 +80,11 @@ ln -s ./llama.cpp/build/bin/llama-server llama-server
 
 Before downloading the massive 18GB Gemma-4 model, I validated my entire pipeline end-to-end with a smaller model: [**NVIDIA Nemotron-3-Nano-4B**](https://huggingface.co/unsloth/NVIDIA-Nemotron-3-Nano-4B-GGUF) at Q8 quantization, weighing in at just 3.9GB. This is a workflow I strongly recommend. You want to confirm that `llama.cpp`, Metal acceleration, and your orchestrator all work together *before* committing to a multi-hour download.
 
-![Downloading NVIDIA Nemotron-3-Nano-4B as a pipeline validation step. 3.9GB downloads far faster than 18GB.](static/images/blog_nemotron_nano_download.png)
+![Downloading NVIDIA Nemotron-3-Nano-4B as a pipeline validation step. 3.9GB downloads far faster than 18GB.](assets/images/blog_nemotron_nano_download.png)
 
 Booting the server with the smaller model produced exactly what I wanted to see: the Metal framework fully initialized, unified memory detected, and all GPU families registered.
 
-![Metal GPU framework initialization on the M1. Note the unified memory confirmation, bfloat support, and the recommendedMaxWorkingSetSize confirming access to the full 32GB memory pool.](static/images/blog_nemotron_llama_server.png)
+![Metal GPU framework initialization on the M1. Note the unified memory confirmation, bfloat support, and the recommendedMaxWorkingSetSize confirming access to the full 32GB memory pool.](assets/images/blog_nemotron_llama_server.png)
 
 The server output confirmed `has unified memory = true`, `simdgroup matrix mul. = true`, and a `recommendedMaxWorkingSetSize` of roughly 26,800 MB. That last number is critical: it tells you how much VRAM the Metal backend can access, and on the M1, it is shared directly with system RAM. The pipeline was solid. Time to bring in the real model.
 
@@ -105,7 +105,7 @@ hf download unsloth/gemma-4-26B-A4B-it-GGUF \
 
 The `--include` filters are important. The first pulls the multimodal vision projector (`mmproj-BF16`), giving the model the ability to understand images in addition to code. The second targets the `UD-Q4_K_XL` quantization specifically, which is the sweet spot for quality vs. memory on a 32GB machine: roughly 15.9GB on disk.
 
-![An 18.3GB download failing mid-transfer via the default hf download CLI. Hours of progress, gone.](static/images/blog_failed_download.png)
+![An 18.3GB download failing mid-transfer via the default hf download CLI. Hours of progress, gone.](assets/images/blog_failed_download.png)
 
 Fair warning: this is an 18.3GB download. Mine crawled at points, dropping to 519KB/s before eventually failing outright. The default `hf download` CLI does support resuming, but in practice the recovery is fragile on large files over unstable connections. I lost hours of progress to a single dropped transfer. This is precisely why I validated the pipeline with the Nemotron model first: you do not want to wait hours for a download only to discover your build is broken.
 
@@ -139,22 +139,25 @@ I created an `opencode.json` file at the root of my project:
       "npm": "@ai-sdk/openai-compatible",
       "name": "llama-server (local)",
       "options": {
-        "baseURL": "http://127.0.0.1:8001/"
+        "baseURL": "http://127.0.0.1:8001"
       },
       "models": {
-        "gemma-4-26B": {
-          "name": "Gemma-4 26B A4B-it (local)",
+        "gemma-4:26b-a4b-it": {
+          "name": "Gemma-4-26B-A4B-it (local)",
           "limit": {
-            "context": 8192,
-            "output": 4096
+            "context": 32000,
+            "output": 65536
+          }
+        },
+        "nvidia-nemotron-3-nano:4b": {
+          "name": "NVIDIA-Nemotron-3-Nano-4B (local)",
+          "limit": {
+            "context": 32000,
+            "output": 65536
           }
         }
       }
     }
-  },
-  "model": "llama.cpp/gemma-4-26B",
-  "server": {
-    "port": 4096
   }
 }
 ```
@@ -163,12 +166,12 @@ A few things to note:
 
 - The `npm` field tells OpenCode to use the `@ai-sdk/openai-compatible` package for this provider.
 - The `baseURL` points to `127.0.0.1:8001` where our `llama-server` will be listening.
-- Context and output limits are set conservatively at 8,192 and 4,096 tokens respectively to keep memory stable during long agentic sessions. The model supports up to 262K, but pushing that on 32GB with an agent running simultaneously is asking for OOM kills.
-- The `server.port` at 4096 is for OpenCode's own web UI, separate from the llama.cpp inference server.
+- Context and output limits are set to 32,000 and 65,536 tokens respectively. The model supports up to 262K context, but keeping it at 32K is a practical ceiling for stable agentic sessions on 32GB of RAM.
+- A second model, **NVIDIA Nemotron-3 Nano 4B**, is configured alongside Gemma-4 as a lightweight alternative for faster, less resource-intensive tasks.
 
 Once the server was running with Gemma-4 loaded, I could verify everything through the llama.cpp web interface at `127.0.0.1:8001`:
 
-![Gemma-4 26B loaded and serving in llama.cpp. 15.9GB model size, 25.23B parameters, 262K token context window, and Vision modality confirmed.](static/images/blog_model_details.png)
+![Gemma-4 26B loaded and serving in llama.cpp. 15.9GB model size, 25.23B parameters, 262K token context window, and Vision modality confirmed.](assets/images/blog_model_details.png)
 
 25.23 billion parameters. A 262,144 token context window. Vision capability. All running from a file on my local disk, served over localhost. No cloud, no API key, no rate limit.
 
@@ -225,7 +228,7 @@ Here's what each server flag does:
 | `--temp 0.6` | Sampling temperature - slightly below default for more deterministic code generation |
 | `--top-p 0.95` | Nucleus sampling threshold - keeps output focused while allowing some creativity |
 
-![OpenCode analyzing a project's architecture, generating detailed documentation, and proposing Git changes across 5 files. All powered locally by gemma-4-26B in 45 seconds.](static/images/blog_opencode_web.png)
+![OpenCode analyzing a project's architecture, generating detailed documentation, and proposing Git changes across 5 files. All powered locally by gemma-4-26B in 45 seconds.](assets/images/blog_opencode_web.png)
 
 The result was staggering. The Unsloth Gemma-4 26B model chewed through my context, understood the architecture of my local files, and began writing, diffing, and applying code. In the screenshot above, you can see it analyzing an `architect.py` file, breaking down its Pydantic data models, explaining the `run_architect` function flow, and proposing 5 Git changes across the project. The M1 pushed out tokens fast enough for real-time development. The footer confirms it: `gemma-4-26B`, 45 seconds for a full architectural analysis and code generation pass.
 
