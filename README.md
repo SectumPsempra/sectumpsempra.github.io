@@ -1,5 +1,3 @@
-# Severing the API Cord: How I Built a Fully Offline 26B AI Coding Agent on my M1 Mac
-
 > **TL;DR** - I compiled `llama.cpp` with Metal GPU acceleration on an M1 Mac, loaded Google's Gemma-4 26B via Unsloth's quantization, and wired it to OpenCode for a fully agentic, offline coding workflow. Total API cost: **$0**. Data sent to the cloud: **0 bytes**. This post is the exact, reproducible blueprint.
 
 The cloud is phenomenal - until you're on a 12-hour flight, dealing with rate limits, or working on proprietary code you *absolutely cannot* send to an external API.
