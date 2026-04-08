@@ -1,7 +1,3 @@
----
-layout: default
----
-
 # Severing the API Cord: How I Built a Fully Offline 26B AI Coding Agent on my M1 Mac
 
 > **TL;DR** - I compiled `llama.cpp` with Metal GPU acceleration on an M1 Mac, loaded Google's Gemma-4 26B via Unsloth's quantization, and wired it to OpenCode for a fully agentic, offline coding workflow. Total API cost: **$0**. Data sent to the cloud: **0 bytes**. This post is the exact, reproducible blueprint.
@@ -115,7 +111,7 @@ The `--include` filters are important. The first pulls the multimodal vision pro
 
 Fair warning: this is an 18.3GB download. Mine crawled at points, dropping to 519KB/s before eventually failing outright. The default `hf download` CLI does support resuming, but in practice the recovery is fragile on large files over unstable connections. I lost hours of progress to a single dropped transfer. This is precisely why I validated the pipeline with the Nemotron model first: you do not want to wait hours for a download only to discover your build is broken.
 
-After watching `hf download` fail, I switched to [`hfd.sh`](https://github.com/huggingface/hf_downloader) (Hugging Face Downloader) with `aria2c` as the download engine. Unlike the default CLI, `aria2c` handles resume reliably: it tracks per-segment progress in `.aria2` control files, so a dropped connection picks up exactly where it left off instead of restarting the entire file:
+After watching `hf download` fail, I switched to [`hfd.sh`](https://gist.github.com/yeahjack/31f542ee6cab3c3e2c30594b7693cb22#file-hfd-sh) (Hugging Face Downloader) with `aria2c` as the download engine. Unlike the default CLI, `aria2c` handles resume reliably: it tracks per-segment progress in `.aria2` control files, so a dropped connection picks up exactly where it left off instead of restarting the entire file:
 
 ```bash
 ./hfd.sh unsloth/gemma-4-26B-A4B-it-GGUF \
