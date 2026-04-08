@@ -17,25 +17,28 @@ body {
 // ── Header ──────────────────────────────────────────────
 .page-header {
   background-image: linear-gradient(135deg, #0d1117 0%, #161b22 50%, #1a2332 100%);
-  padding: 3.5rem 1rem;
+  padding: 4rem 1rem 3.5rem;
 }
 
 .project-name {
   font-family: 'Inter', sans-serif;
   font-weight: 800;
-  font-size: 2.4rem;
+  font-size: 2.6rem;
   letter-spacing: -0.5px;
+  color: #ffffff;
 }
 
 .project-tagline {
   font-family: 'Inter', sans-serif;
   font-weight: 400;
-  font-size: 1.25rem;
-  opacity: 0.85;
+  font-size: 1.3rem;
+  color: rgba(255, 255, 255, 0.75);
+  border-bottom: none;
+  margin-top: 0.5rem;
 }
 
-// ── Headings ────────────────────────────────────────────
-h2 {
+// ── Headings (scoped to body content only) ──────────────
+.main-content h2 {
   font-family: 'Inter', sans-serif;
   font-weight: 700;
   color: #0d1117;
@@ -44,7 +47,7 @@ h2 {
   border-bottom: 2px solid #0969da;
 }
 
-h3 {
+.main-content h3 {
   font-family: 'Inter', sans-serif;
   font-weight: 600;
   color: #24292f;
