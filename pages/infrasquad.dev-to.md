@@ -1,221 +1,90 @@
 ---
-title: We Built a Multi-Agent System That Designs AWS Infrastructure, Writes Terraform, and Audits Its Own Security - From Plain English
+title: "I Let 4 AI Agents Design AWS Infrastructure, Write the Terraform, and Audit Their Own Security. Here's What Broke."
 published: false
-tags: ai, devops, terraform, agents
+tags: ai, devops, terraform, langgraph
 cover_image: https://sectumpsempra.github.io/assets/images/infrasquad/infrasquad_hero.png
 ---
 
-Designing cloud infrastructure from scratch involves at least three people and three separate conversations: an architect to pick the services, a DevOps engineer to write the Terraform, and a security engineer to review it. Then someone has to draw the diagram - which will be out of date the moment the architecture changes.
+Designing cloud infrastructure usually takes three meetings.
 
-We asked a different question: **what if all four of those roles ran as agents in a single, automated pipeline?**
+One with the architect to decide which services to use. One with the DevOps engineer to actually write the Terraform. One with the security team to explain, again, why `0.0.0.0/0` is not an acceptable production CIDR.
 
-The result is InfraSquad. Type your infrastructure requirements in plain English. Get back deployable Terraform HCL, a security audit with specific remediation guidance, and a rendered architecture diagram - in one shot.
+By the time all three conversations happen, the architecture diagram is already out of date.
 
-> **TL;DR** - InfraSquad is an open-source multi-agent system built on LangGraph. Four specialized agents (Product Architect, DevOps Engineer, Security Auditor, Visualizer) collaborate in a cyclic state machine. Security findings loop back to the DevOps agent for remediation, capped at three cycles to prevent infinite loops. External scanning runs via an MCP server using tfsec or checkov, with graceful fallback to LLM review. The entire stack is Python, runs locally, and costs nothing beyond your LLM API calls.
+So we asked a different question: what if all four roles ran as AI agents in a single automated pipeline?
 
-The GitHub repo is at [Andela-AI-Engineering-Bootcamp/infrasquad](https://github.com/Andela-AI-Engineering-Bootcamp/infrasquad).
+You type your requirements in plain English. You get back deployable Terraform HCL, a security audit with specific remediation guidance, and a rendered architecture diagram. In one shot, without the meetings.
+
+That's InfraSquad. This post is about what we learned building it, what broke badly, and what we would tell ourselves at the start.
+
+> **TL;DR:** InfraSquad is a multi-agent system built on LangGraph. Four agents collaborate in a cyclic state machine. Security findings loop back to the DevOps agent for fixes, capped at three cycles. Without that cap, the loop runs forever. We learned this during testing. The code is open source at [Andela-AI-Engineering-Bootcamp/infrasquad](https://github.com/Andela-AI-Engineering-Bootcamp/infrasquad).
 
 ---
 
 ## Meet the Squad
 
-Before diving into the machinery, here's what each agent is responsible for:
+Four agents. One shared pipeline. Here is what each one actually does:
 
-| Agent | Role | What It Produces |
+| Agent | Responsibility | Output |
 |:---|:---|:---|
-| **Product Architect** | Analyzes your requirements, considers scale/compliance/cost | A structured, numbered AWS architecture plan |
-| **DevOps Engineer** | Translates the plan into deployable code; remediates security findings | Valid Terraform HCL targeting AWS |
-| **Security Auditor** | Scans the Terraform via MCP (tfsec/checkov) or LLM fallback | A structured JSON security report with severities and recommendations |
-| **Visualizer** | Reads the final plan and code | A Mermaid.js architecture diagram, rendered to PNG |
+| **Product Architect** | Reads your requirements, considers scale, compliance, cost | A numbered AWS architecture plan |
+| **DevOps Engineer** | Translates the plan into code; fixes security findings when sent back | Valid Terraform HCL |
+| **Security Auditor** | Runs tfsec or checkov via MCP; classifies every finding by severity | A structured JSON security report |
+| **Visualizer** | Reads the final plan and code after security passes | A Mermaid architecture diagram rendered to PNG |
 
-These agents don't just run sequentially and exit. The Security Auditor can send the DevOps Engineer back to fix its own code. The DevOps Engineer can loop up to three times before the pipeline moves on regardless. That cyclic behavior is the core engineering challenge - and why we chose LangGraph.
+The critical word in that table is "sent back." The Security Auditor does not just generate a report and hand it off. It can send the DevOps Engineer back to fix its own code. That feedback loop is the most interesting design decision in the system. It is also how we nearly created an infinite loop on the second day of integration testing.
+
+![InfraSquad -- four AI agents collaborating on cloud infrastructure design](https://sectumpsempra.github.io/assets/images/infrasquad/infrasquad_hero.png)
 
 ---
 
-## The State Machine
+## The Pipeline (and the Two Places It Can Loop)
 
-The entire workflow is a LangGraph `StateGraph` - a directed graph where nodes are agent functions and edges are conditional routing rules. All agents share a single `AgentState` TypedDict:
+Here is the full state machine:
+
+![InfraSquad pipeline diagram showing the LangGraph state machine -- validate_input, architect, devops, validate_output, security, visualizer, with two loop-back arrows for HCL errors and security findings](https://sectumpsempra.github.io/assets/images/infrasquad/infrasquad_pipeline_diagram.png)
+
+The happy path is straightforward:
+
+1. **validate_input** runs three checks before anything expensive happens
+2. **architect** produces a numbered AWS architecture plan
+3. **devops** writes Terraform HCL from that plan
+4. **validate_output** checks the HCL deterministically for forbidden patterns and structural validity
+5. **security** scans with tfsec or checkov via MCP
+6. **visualizer** renders the architecture as a Mermaid diagram
+
+Two of those six nodes can send the pipeline backwards. That is intentional. It is also dangerous if you do not cap the cycle count, which we did not do initially.
+
+All six agents share a single typed state object:
 
 ```python
 class AgentState(TypedDict, total=False):
-    messages: Annotated[list, add_messages]
     user_request: str
     architecture_plan: str
     terraform_code: str
     security_report: dict[str, Any]
     security_passed: bool
-    diagram: str
-    diagram_image_path: str
     remediation_count: int
     hcl_remediation_count: int
     hcl_validation_errors: list[str]
-    is_infrastructure_request: bool
-    is_followup: bool
     current_phase: str
-    error: str | None
 ```
 
-The graph has three possible entry paths after input validation:
-
-```
-validate_input ──► architect ──► devops ──► validate_output ──► security ──► visualizer ──► END
-               │                    ▲              │  (loop)         │  (loop)
-               ├──► fallback ──► END └─────────────┘                └──────────────┘
-               └──► conversation ──► END
-```
-
-New infrastructure request? Full pipeline. Follow-up question about something already generated? The `conversation` node handles it contextually. Off-topic? Polite refusal via `fallback`.
-
-The graph compilation is straightforward:
-
-```python
-def build_graph(checkpointer: Any = None) -> CompiledStateGraph:
-    graph = StateGraph(AgentState)
-
-    graph.add_node("validate_input", validate_input_node)
-    graph.add_node("conversation", conversation_node)
-    graph.add_node("fallback", fallback_node)
-    graph.add_node("architect", architect_node)
-    graph.add_node("devops", devops_node)
-    graph.add_node("validate_output", validate_output_node)
-    graph.add_node("security", security_node)
-    graph.add_node("visualizer", visualizer_node)
-
-    graph.set_entry_point("validate_input")
-
-    graph.add_conditional_edges(
-        "validate_input",
-        route_after_validation,
-        {"architect": "architect", "conversation": "conversation", "fallback": "fallback"},
-    )
-    graph.add_edge("architect", "devops")
-    graph.add_edge("devops", "validate_output")
-    graph.add_conditional_edges("validate_output", route_after_output_validation,
-                                {"security": "security", "devops": "devops"})
-    graph.add_conditional_edges("security", route_after_security,
-                                {"visualizer": "visualizer", "devops": "devops"})
-    graph.add_edge("visualizer", END)
-
-    return graph.compile(checkpointer=checkpointer)
-```
-
-The `checkpointer` parameter accepts a LangGraph saver (we use `SqliteSaver`) for multi-turn conversation persistence. Pass `None` to get a stateless graph - useful for tests.
+The `total=False` matters. Without it, every agent would need to set every field, even fields it knows nothing about. With it, agents only write what they own. Silent downstream failures from unexpected `None` values were the most frustrating class of bug we hit early on.
 
 ---
 
-## Input Validation: Three Layers Before the LLM Sees Anything
+## We Almost Created an Infinite Loop on Day Two
 
-The most expensive mistake in an agentic pipeline is burning LLM tokens on requests that should never have reached the agents. InfraSquad catches these at three levels:
+During integration testing, we ran a request for an internet-facing Application Load Balancer.
 
-**Layer 1: Chitchat detection (deterministic, zero cost)**
+The Security Auditor flagged it: `AVD-AWS-0107, HIGH -- security group allows unrestricted ingress from 0.0.0.0/0`. The DevOps agent tried to fix it. The Security Auditor re-scanned. Same finding. The DevOps agent tried again. Same finding.
 
-A frozenset of 40+ conversational tokens catches "thanks", "ok cool", "👍" before anything else runs:
+The problem: a public ALB is supposed to have unrestricted public ingress. That is what "internet-facing" means. The security finding was technically correct and permanently unfixable given the design intent. The LLM had no way to distinguish "security issue to remediate" from "accepted design constraint."
 
-```python
-_CHITCHAT_TOKENS: frozenset[str] = frozenset({
-    "cool", "okay", "ok", "sure", "thanks", "thank you", "hi", "hello",
-    "great", "awesome", "got it", "sounds good", "yep", "yup", "yes", ...
-})
+Without an exit condition, this loop runs forever.
 
-def _is_chitchat(text: str) -> bool:
-    normalized = text.strip().lower().rstrip("!.,?")
-    if normalized in _CHITCHAT_TOKENS:
-        return True
-    tokens = [t.strip("!.,?") for t in normalized.split()]
-    return bool(tokens) and len(tokens) <= 4 and all(t in _CHITCHAT_TOKENS for t in tokens)
-```
-
-**Layer 2: Keyword matching (regex, zero cost)**
-
-A compiled regex matches 45 infrastructure keywords - `vpc`, `ec2`, `rds`, `lambda`, `eks`, `iam`, `route53`, `autoscaling`, and more. Two or more keyword matches skip the LLM check entirely - this is the fast path for clear requests like "VPC with RDS Postgres and ALB".
-
-```python
-elif keyword_match_count(user_request) >= 2:
-    # High confidence - skip the LLM round-trip (~2s saved per clear request)
-    is_valid = True
-```
-
-**Layer 3: LLM plausibility check (for borderline cases only)**
-
-Single-keyword matches like "server" or "cloud" are borderline - `"aws tomato server"` passes keyword matching but is nonsense. For these, a lightweight LLM call classifies the request as `proceed`, `clarify`, or `reject`:
-
-```python
-class _FirstMessageClassification(BaseModel):
-    intent: Literal["proceed", "clarify", "reject"]
-```
-
-The three-way classification matters: `clarify` triggers a helpful guidance message asking for more detail, while `reject` returns a direct refusal. Both avoid running the full pipeline.
-
-For **active conversations** (follow-up turns), keyword matching is actually *wrong*. "Explain the terraform code" contains "terraform" but is clearly a follow-up, not a new generation request. So in active sessions, we switch to a full LLM intent classifier that distinguishes `new_generation`, `follow_up`, and `off_topic`.
-
----
-
-## The Feedback Loop: Security Audit → Remediation → Re-audit
-
-This is the most interesting part of the system architecturally. After the DevOps agent generates Terraform, two separate validation stages can send it back for rework.
-
-### Stage 1: HCL Guardrail (before security scan)
-
-Before the Terraform even reaches the Security Auditor, it passes through a deterministic HCL validator that checks for three things:
-
-```python
-_FORBIDDEN_PATTERNS = [
-    (r"AdministratorAccess",  "Uses AdministratorAccess IAM policy"),
-    (r"0\.0\.0\.0/0",         "Contains 0.0.0.0/0 CIDR block - opens resource to the internet"),
-    (r"public\s*=\s*true",    "Sets public access to true"),
-]
-```
-
-It also verifies structural validity: `provider` and `resource` blocks must be present, `resource` blocks must have the correct signature `resource "type" "name" {`, and braces must be balanced. If any check fails, the `validate_output` node sends the code back to the DevOps agent with the specific error list.
-
-Separately, a regex IAM safety check runs *independently* of the HCL guardrail:
-
-```python
-_ADMIN_ACCESS_PATTERN = re.compile(r"AdministratorAccess", re.IGNORECASE)
-_STAR_POLICY_PATTERN  = re.compile(r'"Action"\s*:\s*"\*"')
-```
-
-Wildcard IAM actions and `AdministratorAccess` policies are blocked regardless of model behavior. This check runs whether or not the LLM thought it was generating safe code.
-
-### Stage 2: Security Audit via MCP
-
-After the HCL guardrail passes, the Security Auditor calls the MCP server:
-
-```python
-result = _try_tfsec(tmpdir) or _try_checkov(tmpdir)
-```
-
-The MCP tool writes the Terraform to a temp directory, runs tfsec (or falls back to checkov, or further falls back to LLM review). The security agent classifies findings by severity:
-
-- **CRITICAL**: Immediate blocker - wildcard IAM, public S3 buckets, hardcoded credentials
-- **HIGH**: Must fix before production - open security groups (`0.0.0.0/0`), missing encryption at rest/transit, no VPC Flow Logs
-- **MEDIUM**: Should fix - missing S3 versioning, backup retention < 7 days
-- **LOW**: Best practice gaps - missing WAF, no CloudWatch log retention
-
-`passed = True` only when there are zero CRITICAL and zero HIGH findings. MEDIUM/LOW findings alone don't block the pipeline - they're reported but the diagram still renders.
-
-If the audit fails, the Security Auditor's findings go back to the DevOps agent with a structured remediation prompt:
-
-```
-MANDATORY SECURITY REMEDIATION - 4 finding(s) / 3 unique rule(s)
-Fix EVERY numbered item below. Do NOT skip any.
-
-── CRITICAL/HIGH (2 unique rule(s)) - fix every one ──
-
-Finding 1. [HIGH] AVD-AWS-0107 - aws_security_group.app_sg
-   Issue: Security group allows unrestricted ingress from 0.0.0.0/0
-   Fix:   Restrict ingress to specific CIDR ranges or security group references.
-
-Finding 2. [HIGH] AVD-AWS-0132 - aws_s3_bucket.assets
-   Issue: S3 bucket does not use KMS encryption with a customer-managed key
-   Fix:   Add aws_kms_key + aws_s3_bucket_server_side_encryption_configuration
-```
-
-The DevOps agent sees this as a `MANDATORY SECURITY REMEDIATION` block in its next prompt and knows to fix every numbered item.
-
-### Capping the Loop
-
-Both remediation loops have hard caps. The routing logic is:
+Here is what the routing logic looks like with the cap in place:
 
 ```python
 def route_after_security(state: AgentState) -> Literal["visualizer", "devops"]:
@@ -226,20 +95,24 @@ def route_after_security(state: AgentState) -> Literal["visualizer", "devops"]:
     return "devops"
 ```
 
-After three cycles, the pipeline proceeds to visualization even with outstanding findings. Those unresolved issues appear in the Security tab as advisory warnings rather than hard blockers. This prevents infinite loops when the LLM can't resolve a finding - a real failure mode we hit during testing.
+After three cycles, the pipeline proceeds with whatever state it has. Unresolved findings appear as advisory warnings in the Security tab, not hard failures. The same cap exists on the HCL validation loop.
+
+**Add your cycle caps before your first integration test.** Not after. You will hit this case.
 
 ---
 
-## One Specific Decision: CIDR Sanitization
+## The One Bad Habit We Couldn't Engineer Away
 
-The LLM *reliably* generates `0.0.0.0/0` security group ingress rules for any public-facing resource, even when explicitly told not to. We discovered this would trigger the HCL guardrail on almost every first generation, creating an immediate remediation loop on nearly every request.
+Every model we tested had the same behavior: for any internet-facing resource, it generated `0.0.0.0/0` as the security group ingress CIDR. Even with explicit instructions in the system prompt. Even with examples. Even with counter-examples.
 
-Rather than fight the model in the prompt, we added a deterministic sanitizer that runs immediately after generation:
+We tried prompt engineering for weeks. The model would acknowledge the constraint, then generate `0.0.0.0/0` anyway on the next call.
+
+So we stopped fighting it and added a deterministic sanitizer that runs on the DevOps agent's output before validation even starts:
 
 ```python
 _CIDR_SANITISATIONS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r'"0\.0\.0\.0/0"'), '"10.0.0.0/8"'),
-    (re.compile(r'"::/0"'),          '"fc00::/7"'),
+    (re.compile(r'"::/0"'),         '"fc00::/7"'),
 ]
 
 def _sanitize_hcl(hcl: str) -> str:
@@ -250,176 +123,250 @@ def _sanitize_hcl(hcl: str) -> str:
 clean_hcl = _sanitize_hcl(output.terraform_hcl)
 ```
 
-`10.0.0.0/8` is a safe broad-internal placeholder - operators can widen it when deploying to production. This single change broke the HCL remediation loop entirely for the most common case. The guardrail now fires far less frequently on first-pass generations, and when it does, it's for a real structural issue.
+`10.0.0.0/8` is a broad internal placeholder. Operators narrow it before deploying to production.
+
+This single function broke the HCL validation loop for the most common case. First-pass generations stopped triggering the guardrail on CIDR issues almost entirely. When the guardrail fires now, it catches a genuine structural problem.
+
+**When a model reliably produces the same wrong output, fix it deterministically. Do not prompt your way out of a consistency problem.**
 
 ---
 
-## MCP: Decoupled External Tools
+## Three Questions Before the LLM Sees Anything
 
-We used the Model Context Protocol to keep tfsec and mmdc (Mermaid rendering) as decoupled services. Agents call tools through a protocol - not direct imports - which means:
+The most expensive mistake in an agentic pipeline is burning tokens on requests that should never reach the agents. InfraSquad catches these at three layers before anything expensive runs.
 
-1. The scanner can be swapped or updated without changing agent code
-2. Failures in external tools are isolated - a tfsec timeout doesn't crash the security node
-3. The MCP server can run independently for other clients
+![Three layers of input validation -- chitchat detection, keyword matching, and LLM classification as a narrowing funnel](https://sectumpsempra.github.io/assets/images/infrasquad/infrasquad_validation_funnel.png)
 
-The server registers two tools:
+**Layer 1: Chitchat detection (zero cost)**
+
+A frozenset of 40+ conversational tokens returns immediately. "Thanks", "ok cool", "sounds good", a thumbs-up emoji -- none of these should reach the architect.
 
 ```python
-# run_tfsec_scan: Saves Terraform to temp file, runs tfsec or checkov, returns JSON
-# generate_architecture_diagram: Renders Mermaid.js source to PNG via mmdc
+_CHITCHAT_TOKENS: frozenset[str] = frozenset({
+    "cool", "okay", "ok", "sure", "thanks", "thank you",
+    "hi", "hello", "great", "awesome", "got it", "yep", ...
+})
+
+def _is_chitchat(text: str) -> bool:
+    normalized = text.strip().lower().rstrip("!.,?")
+    tokens = [t.strip("!.,?") for t in normalized.split()]
+    return bool(tokens) and len(tokens) <= 4 and all(t in _CHITCHAT_TOKENS for t in tokens)
 ```
 
-Both tools have graceful fallbacks. tfsec unavailable → try checkov. checkov unavailable → LLM security review with the full `SECURITY_SYSTEM_PROMPT`. mmdc unavailable → save Mermaid source as-is (still fully useful, just not rendered).
+No LLM call. No latency. Instant return.
+
+**Layer 2: Keyword matching (zero cost)**
+
+A compiled regex matches 45 AWS infrastructure keywords. Two or more matches skip the LLM check entirely. "VPC with RDS Postgres and ALB" is obviously a valid request. Spending 2 seconds and tokens to confirm this is wasteful.
+
+```python
+elif keyword_match_count(user_request) >= 2:
+    # High confidence -- skip the LLM round-trip (~2s saved per clear request)
+    is_valid = True
+```
+
+About 70% of valid requests take this fast path.
+
+**Layer 3: LLM plausibility (borderline cases only)**
+
+Single-keyword matches are genuinely ambiguous. "Server" could be valid. "AWS tomato server" should not be. For these, a lightweight LLM call returns one of three outcomes:
+
+```python
+class _FirstMessageClassification(BaseModel):
+    intent: Literal["proceed", "clarify", "reject"]
+```
+
+`clarify` triggers a helpful guidance message. `reject` returns a polite explanation. Both avoid running the full pipeline on nonsense input.
+
+There is a catch. In active conversations, keyword matching stops working correctly. "Explain the Terraform code" contains the word "Terraform" but is clearly a follow-up question, not a new generation request. So in active sessions, we switch to a full intent classifier that distinguishes `new_generation`, `follow_up`, and `off_topic`.
+
+![InfraSquad handling an off-topic query -- the guardrail returns a helpful explanation without triggering the pipeline](https://sectumpsempra.github.io/assets/images/infrasquad/handling_off_topic_query.png)
 
 ---
 
-## Real Output
+## The Security Check That Does Not Trust the LLM
 
-This is what the system actually produces. A prompt like `"VPC with an RDS Postgres instance, an Application Load Balancer, and Redis caching layer"` runs the full pipeline in a few minutes.
+Two patterns are blocked by hardcoded regex, independent of everything else:
 
-**Terraform output:**
+```python
+_ADMIN_ACCESS_PATTERN = re.compile(r"AdministratorAccess", re.IGNORECASE)
+_STAR_POLICY_PATTERN  = re.compile(r'"Action"\s*:\s*"\*"')
+```
 
-![InfraSquad Terraform output showing the generated HCL code in the UI panel](https://sectumpsempra.github.io/assets/images/infrasquad/response_with_code.png)
+`AdministratorAccess` policies and wildcard IAM actions are blocked regardless of what the model thought it generated. Not by the HCL guardrail. Not by the Security Auditor. By a function that runs on every output, unconditionally.
 
-The DevOps agent follows the security baseline baked into its system prompt: S3 buckets get KMS encryption + versioning + public access block, RDS gets `storage_encrypted = true` + `deletion_protection = true` + 7-day backup retention, ElastiCache gets `at_rest_encryption_enabled = true` + `transit_encryption_enabled = true`, VPCs get `aws_flow_log`.
+The reason for running this separately from the guardrail: the HCL guardrail checks for `AdministratorAccess` in a string pattern that could miss an IAM policy embedded inside a heredoc JSON block. The standalone regex catches it regardless of context.
 
-**Architecture diagram:**
-
-![InfraSquad generated Mermaid architecture diagram rendered in the UI](https://sectumpsempra.github.io/assets/images/infrasquad/response_with_mermaid_diagram.png)
-
-The Visualizer generates Mermaid flowchart syntax that accurately maps the services and data flow from the finalized architecture. If mmdc is installed, it renders to PNG; otherwise the source is saved and can be pasted directly into any Mermaid-compatible viewer.
-
-![Rendered architecture diagram - VPC, ALB, EC2 Auto Scaling Group, RDS Multi-AZ, ElastiCache, and S3 shown as a flow diagram](https://sectumpsempra.github.io/assets/images/infrasquad/architecture_diagram.png)
-
-**Guardrails in action:**
-
-Off-topic requests get a clean, helpful fallback - no LLM token waste, no confusing error:
-
-![InfraSquad returning a polite capability explanation for a non-infrastructure query](https://sectumpsempra.github.io/assets/images/infrasquad/handling_off_topic_query.png)
+Two independent checks. Neither relying on the other being correct.
 
 ---
 
-## Design Decisions We Argued About
+## The HCL Guardrail: Before Security Even Runs
 
-The README has a table. Here's the thinking behind each choice:
+Before the Terraform reaches the Security Auditor, it passes through a deterministic validator. This runs on every generation -- first pass and every remediation:
 
-**LangGraph over CrewAI/AutoGen**
+```python
+_FORBIDDEN_PATTERNS = [
+    (r"AdministratorAccess", "Uses AdministratorAccess IAM policy"),
+    (r"0\.0\.0\.0/0",        "Contains 0.0.0.0/0 CIDR -- opens resource to the internet"),
+    (r"public\s*=\s*true",   "Sets public access to true"),
+]
+```
 
-The security remediation loop is cyclic - the Security Auditor sends the DevOps Engineer back, which generates new code, which gets re-scanned. CrewAI's role-based model and AutoGen's conversation-driven approach both require workarounds for cycles. LangGraph's state machine handles them natively with conditional edges. We also needed explicit retry caps and shared typed state across all agents - LangGraph gives both.
+It also checks structural validity: `provider` and `resource` blocks must be present, resource signatures must be well-formed, and braces must balance. Any failure sends the code back to the DevOps agent with the specific error list attached to the next prompt.
 
-**Typed state via TypedDict**
-
-Every agent reads from and writes to the same `AgentState`. Without a clear contract on what each agent receives and produces, integration bugs are silent - an agent gets `None` where it expected a string and fails downstream with a cryptic error. The TypedDict with `total=False` gives us the contract without requiring every field to be present at every stage.
-
-**Pydantic schemas for agent output**
-
-Every agent returns a Pydantic model, not a raw string. The LLM is prompted to return JSON matching a strict schema, and `invoke_with_schema_retry` retries up to three times if parsing fails. This eliminates an entire class of downstream errors - the DevOps agent's Terraform is always a string; the Security Auditor's findings are always a typed list of dicts with `severity`, `resource`, `description`, `recommendation`.
-
-**Keyword classifier for input, not just LLM**
-
-An LLM call for every first message adds ~2 seconds to every request, including the obvious ones ("VPC with RDS Postgres and ALB" is clearly valid). The keyword fast path skips this for high-confidence requests. The LLM plausibility check only fires for borderline single-keyword cases. In practice, about 70% of valid requests take the keyword fast path.
-
-**Regex IAM blocker separate from the HCL guardrail**
-
-`AdministratorAccess` and `"Action": "*"` are blocked by a hardcoded regex that runs independently. Even if the HCL guardrail somehow passes the code through (e.g., the IAM policy is in a JSON document block that the guardrail misses), the IAM check catches it. Two independent checks at the same level, neither relying on the other.
+The CIDR sanitizer runs before this check. That is intentional. Remove `0.0.0.0/0` before validation, so the guardrail only fires on real structural problems.
 
 ---
 
-## Running InfraSquad
+## What the Pipeline Actually Produces
+
+Here is a real run. Request: "VPC with an RDS Postgres instance, an Application Load Balancer, and a Redis caching layer."
+
+The DevOps agent follows a security baseline baked into its system prompt. S3 buckets get KMS encryption, versioning, and public access blocks by default. RDS gets `storage_encrypted = true`, `deletion_protection = true`, and 7-day backup retention. ElastiCache gets encryption at rest and in transit. VPCs get flow logs.
+
+![Terraform HCL generated by the DevOps agent in the InfraSquad UI, showing encryption and security defaults applied](https://sectumpsempra.github.io/assets/images/infrasquad/response_with_code.png)
+
+After the security check passes, the Visualizer reads the finalized plan and code and generates a Mermaid diagram:
+
+![InfraSquad UI showing the generated Mermaid architecture diagram as source and rendered PNG](https://sectumpsempra.github.io/assets/images/infrasquad/response_with_mermaid_diagram.png)
+
+If `mmdc` is installed, the Mermaid source renders directly to PNG:
+
+![Rendered architecture diagram -- VPC, ALB, EC2 Auto Scaling Group, RDS Multi-AZ, ElastiCache, and S3 as a flowchart](https://sectumpsempra.github.io/assets/images/infrasquad/architecture_diagram.png)
+
+If `mmdc` is not installed, the Mermaid source is saved as-is. It is still fully useful -- paste it into any Mermaid viewer and you get the diagram.
+
+---
+
+## The Security Audit Loop: How It Actually Works
+
+When the Security Auditor finds issues, it does not just list them. It produces a structured prompt that becomes the DevOps agent's next input:
+
+```
+MANDATORY SECURITY REMEDIATION -- 3 finding(s)
+Fix EVERY numbered item below. Do NOT skip any.
+
+Finding 1. [HIGH] AVD-AWS-0107 - aws_security_group.app_sg
+   Issue: Security group allows unrestricted ingress on port 443
+   Fix:   Restrict ingress to specific CIDR ranges or security group references.
+
+Finding 2. [HIGH] AVD-AWS-0132 - aws_s3_bucket.assets
+   Issue: S3 bucket does not use KMS encryption with a customer-managed key
+   Fix:   Add aws_kms_key + aws_s3_bucket_server_side_encryption_configuration
+```
+
+The DevOps agent sees `MANDATORY SECURITY REMEDIATION` in its next prompt and treats every numbered item as a required fix.
+
+`security_passed = True` only when there are zero CRITICAL and zero HIGH findings. MEDIUM and LOW findings get reported but do not block the pipeline. The visualization still renders.
+
+---
+
+## Why LangGraph Over CrewAI or AutoGen
+
+This came down to one question: does the framework support cycles with explicit state management and typed contracts?
+
+| Framework | Cyclic workflows | Typed shared state | Explicit retry caps |
+|:---|:---|:---|:---|
+| **LangGraph** | Native conditional edges | TypedDict, full control | Direct in routing logic |
+| **CrewAI** | Workarounds required | Role-based model | Not built-in |
+| **AutoGen** | Conversation-driven | Implicit | Not built-in |
+
+The security remediation loop is cyclic by design. The Security Auditor sends the DevOps Engineer back; the DevOps Engineer generates new code; the new code gets re-scanned. Both CrewAI and AutoGen require workarounds for this pattern. LangGraph's conditional edges handle it natively.
+
+The typed state was also non-negotiable. Without a clear contract on what each agent receives and produces, integration failures are silent. An agent gets `None` where it expected a string and fails three nodes downstream with a cryptic error. `TypedDict` with `total=False` gives every agent a contract it cannot accidentally break.
+
+---
+
+## External Tools Through MCP
+
+tfsec and `mmdc` (Mermaid rendering) run as MCP tools, not direct imports. The agent calls a tool through a protocol.
+
+This looks like over-engineering for a project at this scale. The argument for it: tfsec and `mmdc` are external processes that can timeout, crash, or produce unexpected output. Wrapping them in an MCP tool forces explicit failure handling at every call site.
+
+```python
+result = _try_tfsec(tmpdir) or _try_checkov(tmpdir)
+```
+
+tfsec unavailable? Try checkov. checkov unavailable? LLM security review with the full security system prompt. `mmdc` unavailable? Save Mermaid source. Every external dependency ended up with a fallback path, which would not have happened if they were direct imports.
+
+The MCP server also runs independently. It can be swapped or extended without touching any agent code.
+
+---
+
+## Five Things We'd Tell Ourselves at the Start
+
+**1. Hard-cap your cycles before the first integration test.**
+You will hit the infinite loop case. Probably on a public-facing resource where the security finding is technically correct and architecturally intentional. Add the counter before you need it.
+
+**2. Regex beats prompting for deterministic security invariants.**
+If a property can be expressed as a pattern, enforce it with code. LLM compliance on security constraints is probabilistic. Code compliance is guaranteed. The CIDR sanitizer took 10 lines to write and immediately reduced first-pass HCL failures by the majority.
+
+**3. Typed state is not optional in multi-agent systems.**
+Silent failures are the worst kind. A `TypedDict` with `total=False` is a contract every agent signs. Without it, you are debugging `None` errors three nodes downstream and trying to reconstruct which agent set which field when.
+
+**4. Pydantic schema retry saves more than you expect.**
+Without `invoke_with_schema_retry`, the pipeline fails silently on every malformed JSON response. With it, about 80% of schema failures resolve on the first retry with an error correction prompt. Make this load-bearing from day one.
+
+**5. Input validation saves more tokens than it looks like it will.**
+Chitchat and off-topic requests are common in demo environments. Every one that reaches the architect burns tokens before returning an unhelpful or confusing response. The three-layer guardrail means only genuine infrastructure requests reach the expensive part of the pipeline.
+
+---
+
+## Run It Yourself
 
 ```bash
 git clone https://github.com/Andela-AI-Engineering-Bootcamp/infrasquad.git
 cd infrasquad
-
-# With uv (recommended)
 uv venv && uv sync
-
-# Or with pip
-python -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt
 ```
 
-Copy `.env.example` to `.env` and add your OpenRouter API key:
+Add your OpenRouter API key to `.env`:
 
 ```bash
 OPENROUTER_API_KEY=sk-or-...
 ```
 
-Launch the UI:
+Start the UI:
 
 ```bash
-python app.py                # http://127.0.0.1:7860
-python app.py --share        # public Gradio link
-python app.py --port 8080    # custom port
+python app.py              # localhost:7860
+python app.py --share      # public Gradio URL
+python app.py --port 8080  # custom port
 ```
 
-The default model is `openai/gpt-4o-mini` via OpenRouter. You can swap to any model OpenRouter supports - or point it at a local Ollama instance - by changing `LLM_MODEL` and `LLM_BASE_URL`:
+The default model is `openai/gpt-4o-mini` via OpenRouter. Swap to any model OpenRouter supports by changing two env vars:
 
 ```bash
 LLM_MODEL=anthropic/claude-3-5-sonnet
 LLM_BASE_URL=https://openrouter.ai/api/v1
+```
 
-# Or local:
+Or point it at a local Ollama instance:
+
+```bash
 LLM_MODEL=qwen2.5:72b
 LLM_BASE_URL=http://localhost:11434/v1
 ```
 
-Install optional external tools for automated scanning and diagram rendering:
+Optional tools for real scanner output and rendered diagrams:
 
 ```bash
-brew install tfsec         # macOS - preferred scanner
-pip install checkov        # fallback scanner
-npm install -g @mermaid-js/mermaid-cli  # diagram rendering
+brew install tfsec
+pip install checkov
+npm install -g @mermaid-js/mermaid-cli
 ```
 
-If none of these are installed, the system still works - security falls back to LLM review and diagrams are saved as Mermaid source.
-
-Run the test suite:
-
-```bash
-pip install -e ".[dev]"
-pytest -v
-```
+If none of these are installed, the pipeline still completes. Security falls back to LLM review and diagrams save as Mermaid source.
 
 ---
 
-## What We Learned
-
-**Cyclic graphs need hard caps immediately.** During early testing, the security remediation loop ran indefinitely on certain findings the LLM couldn't resolve - particularly AVD-AWS-0053 (public ALB), which is an accepted design decision, not a fixable bug. The pipeline would loop forever trying to fix something intentional. Hard-coding `max_remediation_cycles = 3` was one of the first bug fixes after the first integration test.
-
-**The LLM will always try to add `0.0.0.0/0`** for any internet-facing resource, regardless of what the system prompt says. The regex sanitizer (replacing it with `10.0.0.0/8`) was more effective than any prompt engineering we tried. When a model consistently produces the same wrong output, the right fix is deterministic post-processing, not a better prompt.
-
-**Pydantic schema retry is load-bearing.** Without it, agents fail silently when the LLM returns slightly malformed JSON - a missing field, a trailing comma, extra text before the `{`. With `invoke_with_schema_retry`, the pipeline retries with an error correction prompt ("Your previous response was not valid JSON: ...") before failing. In practice, this resolves about 80% of schema failures on retry 1.
-
-**Input validation saves more tokens than you'd expect.** Chitchat and off-topic requests are common in demo environments. Every chitchat message that hits the architect burns tokens before returning a confusing error. The three-layer guardrail approach means only genuine infra requests reach the expensive part of the pipeline.
-
-**MCP as an isolation boundary is worth the overhead.** We debated whether the MCP server was over-engineering for a hackathon-scale project. The argument for it: tfsec and mmdc are external processes that can timeout, crash, or produce unexpected output. Wrapping them in an MCP tool forces us to handle every failure mode explicitly rather than letting exceptions propagate into agent code. Every external dependency ended up with a fallback path.
+![Built with: LangGraph, Python 3.12+, OpenRouter, FastMCP, Gradio, pydantic-settings, tfsec/checkov, Mermaid.js, uv](https://sectumpsempra.github.io/assets/images/infrasquad/infrasquad_stack_card.png)
 
 ---
 
-## The Full Stack
+Full source: [infrasquad - github](https://github.com/Andela-AI-Engineering-Bootcamp/infrasquad)
 
-| Component | Tool | Version |
-|:---|:---|:---|
-| Agent framework | LangGraph | 1.1.3 |
-| LLM client | LangChain / langchain-openai | 1.2.13 / 1.1.12 |
-| LLM gateway | OpenRouter | - |
-| Default model | openai/gpt-4o-mini | - |
-| MCP server | FastMCP (mcp Python SDK) | 1.26.0 |
-| Diagram rendering | Mermaid.js via mmdc | 11.12.0 |
-| UI | Gradio | 6.10.0 |
-| Configuration | pydantic-settings | 2.13.1 |
-| Security scanning | tfsec / checkov | - |
-| LLMOps / Tracing | LangSmith | - |
-| Testing | pytest | 9.0.2 |
-| Package manager | uv | 0.10.9 |
-| Runtime | Python | 3.12+ |
+Built at [Andela AI Engineering Bootcamp](https://help.andela.com/hc/en-us/articles/48808339012115-Welcome-to-the-AI-Engineering-Bootcamp) by [Amit](https://linkedin.com/in/amit-bhatt), Ayesha, Elijah, Joel, Stella, and Adetayo.
 
----
-
-InfraSquad is open source. If you're building something with LangGraph, multi-agent pipelines, or IaC automation - or if you just want to see what production-grade Terraform looks like when four AI agents argue about security compliance - the code is all there.
-
-Star the repo: [github.com/Andela-AI-Engineering-Bootcamp/infrasquad](https://github.com/Andela-AI-Engineering-Bootcamp/infrasquad)
-
-Questions, findings, or war stories about cyclic LangGraph workflows? Drop them in the comments.
-
-*Built by the InfraSquad team at Andela AI Engineering Bootcamp - Amit, Ayesha, Elijah, Joel, Stella, and Adetayo.*
+If you are building anything with [LangGraph](https://github.com/langchain-ai/langgraph), multi-agent pipelines, or IaC automation, drop a comment. Especially curious whether anyone else hit the public ALB infinite loop case -- and how you handled it.
