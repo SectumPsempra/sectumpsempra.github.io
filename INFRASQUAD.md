@@ -1,13 +1,13 @@
 ---
 layout: default
-title: "InfraSquad — Autonomous Cloud Infrastructure"
+title: "InfraSquad - Autonomous Cloud Infrastructure"
 description: "Multi-agent LangGraph system: write your infra in English, get Terraform, a security audit, and a diagram."
 permalink: /infrasquad/
 ---
 
-![InfraSquad — four AI agents collaborating on cloud infrastructure design](https://sectumpsempra.github.io/assets/images/infrasquad/infrasquad_hero.png)
+![InfraSquad - four AI agents collaborating on cloud infrastructure design](https://sectumpsempra.github.io/assets/images/infrasquad/infrasquad_hero.png)
 
-# We Built a Multi-Agent System That Designs AWS Infrastructure, Writes Terraform, and Audits Its Own Security — From Plain English
+# We Built a Multi-Agent System That Designs AWS Infrastructure, Writes Terraform, and Audits Its Own Security - From Plain English
 
 Designing cloud infrastructure from scratch involves at least three people and three separate conversations: an architect to pick the services, a DevOps engineer to write the Terraform, and a security engineer to review it. Then someone has to draw the diagram - which will be out of date the moment the architecture changes.
 

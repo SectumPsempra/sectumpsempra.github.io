@@ -1,10 +1,10 @@
 ---
 layout: default
 title: "AI Engineering"
-description: "Building real systems with AI — from Apple Silicon inference to production multi-agent pipelines."
+description: "Building real systems with AI - from Apple Silicon inference to production multi-agent pipelines."
 ---
 
-A hands-on engineering blog. Every post covers a complete, working system — the decisions behind it, the code that runs it, and the failure modes that shaped it.
+A hands-on engineering blog. Every post covers a complete, working system - the decisions behind it, the code that runs it, and the failure modes that shaped it.
 
 ---
 
@@ -20,12 +20,12 @@ I compiled `llama.cpp` with Metal GPU acceleration on an M1 Mac, loaded Google's
 
 ---
 
-## 🤖 InfraSquad — Multi-Agent AWS Infrastructure
+## 🤖 InfraSquad - Multi-Agent AWS Infrastructure
 
-[![InfraSquad — four AI agents collaborating on cloud infrastructure design and security auditing](/assets/images/infrasquad/infrasquad_hero.png)](/infrasquad/)
+[![InfraSquad - four AI agents collaborating on cloud infrastructure design and security auditing](/assets/images/infrasquad/infrasquad_hero.png)](/infrasquad/)
 
 `LangGraph` &nbsp;·&nbsp; `Terraform` &nbsp;·&nbsp; `AWS` &nbsp;·&nbsp; `Security Automation` &nbsp;·&nbsp; *~15 min read*
 
-Four specialized AI agents collaborate in a cyclic LangGraph state machine to architect, write Terraform, audit security with remediation loops, and render architecture diagrams — from a single plain-English description.
+Four specialized AI agents collaborate in a cyclic LangGraph state machine to architect, write Terraform, audit security with remediation loops, and render architecture diagrams - from a single plain-English description.
 
 [**Read post →**](/infrasquad/)

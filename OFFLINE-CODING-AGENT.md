@@ -1,7 +1,7 @@
 ---
 layout: default
 title: "Severing the API Cord"
-description: "How I Built a Fully Offline 26B AI Coding Agent on my M1 Mac — $0 API cost, zero cloud."
+description: "How I Built a Fully Offline 26B AI Coding Agent on my M1 Mac - $0 API cost, zero cloud."
 permalink: /offline-coding-agent/
 ---
 
