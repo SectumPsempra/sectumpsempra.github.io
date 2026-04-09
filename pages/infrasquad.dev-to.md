@@ -1,8 +1,8 @@
 ---
-title: "I Let 4 AI Agents Design AWS Infrastructure, Write the Terraform, and Audit Their Own Security. Here's What Broke."
+title: "We Let AI Write Our Terraform. Then We Gave It a Security Conscience"
 published: false
 tags: ai, devops, terraform, langgraph
-cover_image: https://sectumpsempra.github.io/assets/images/infrasquad/infrasquad_hero.png
+cover_image: https://media2.dev.to/dynamic/image/width=1000,height=420,fit=cover,gravity=auto,format=auto/https%3A%2F%2Fdev-to-uploads.s3.amazonaws.com%2Fuploads%2Farticles%2Fr8ga7hiwa4bl5cpo409o.png
 ---
 
 Designing cloud infrastructure usually takes three meetings.
@@ -34,7 +34,7 @@ Four agents. One shared pipeline. Here is what each one actually does:
 
 The critical word in that table is "sent back." The Security Auditor does not just generate a report and hand it off. It can send the DevOps Engineer back to fix its own code. That feedback loop is the most interesting design decision in the system. It is also how we nearly created an infinite loop on the second day of integration testing.
 
-![InfraSquad -- four AI agents collaborating on cloud infrastructure design](https://sectumpsempra.github.io/assets/images/infrasquad/infrasquad_hero.png)
+![InfraSquad-four AI agents collaborating on cloud infrastructure design](https://sectumpsempra.github.io/assets/images/infrasquad/infrasquad_hero.png)
 
 ---
 
@@ -42,7 +42,7 @@ The critical word in that table is "sent back." The Security Auditor does not ju
 
 Here is the full state machine:
 
-![InfraSquad pipeline diagram showing the LangGraph state machine -- validate_input, architect, devops, validate_output, security, visualizer, with two loop-back arrows for HCL errors and security findings](https://sectumpsempra.github.io/assets/images/infrasquad/infrasquad_pipeline_diagram.png)
+![InfraSquad pipeline diagram showing the LangGraph state machine-validate_input, architect, devops, validate_output, security, visualizer, with two loop-back arrows for HCL errors and security findings](https://sectumpsempra.github.io/assets/images/infrasquad/infrasquad_pipeline_diagram.png)
 
 The happy path is straightforward:
 
@@ -78,7 +78,7 @@ The `total=False` matters. Without it, every agent would need to set every field
 
 During integration testing, we ran a request for an internet-facing Application Load Balancer.
 
-The Security Auditor flagged it: `AVD-AWS-0107, HIGH -- security group allows unrestricted ingress from 0.0.0.0/0`. The DevOps agent tried to fix it. The Security Auditor re-scanned. Same finding. The DevOps agent tried again. Same finding.
+The Security Auditor flagged it: `AVD-AWS-0107, HIGH-security group allows unrestricted ingress from 0.0.0.0/0`. The DevOps agent tried to fix it. The Security Auditor re-scanned. Same finding. The DevOps agent tried again. Same finding.
 
 The problem: a public ALB is supposed to have unrestricted public ingress. That is what "internet-facing" means. The security finding was technically correct and permanently unfixable given the design intent. The LLM had no way to distinguish "security issue to remediate" from "accepted design constraint."
 
@@ -135,11 +135,11 @@ This single function broke the HCL validation loop for the most common case. Fir
 
 The most expensive mistake in an agentic pipeline is burning tokens on requests that should never reach the agents. InfraSquad catches these at three layers before anything expensive runs.
 
-![Three layers of input validation -- chitchat detection, keyword matching, and LLM classification as a narrowing funnel](https://sectumpsempra.github.io/assets/images/infrasquad/infrasquad_validation_funnel.png)
+![Three layers of input validation-chitchat detection, keyword matching, and LLM classification as a narrowing funnel](https://sectumpsempra.github.io/assets/images/infrasquad/infrasquad_validation_funnel.png)
 
 **Layer 1: Chitchat detection (zero cost)**
 
-A frozenset of 40+ conversational tokens returns immediately. "Thanks", "ok cool", "sounds good", a thumbs-up emoji -- none of these should reach the architect.
+A frozenset of 40+ conversational tokens returns immediately. "Thanks", "ok cool", "sounds good", a thumbs-up emoji-none of these should reach the architect.
 
 ```python
 _CHITCHAT_TOKENS: frozenset[str] = frozenset({
@@ -161,7 +161,7 @@ A compiled regex matches 45 AWS infrastructure keywords. Two or more matches ski
 
 ```python
 elif keyword_match_count(user_request) >= 2:
-    # High confidence -- skip the LLM round-trip (~2s saved per clear request)
+    # High confidence-skip the LLM round-trip (~2s saved per clear request)
     is_valid = True
 ```
 
@@ -180,7 +180,7 @@ class _FirstMessageClassification(BaseModel):
 
 There is a catch. In active conversations, keyword matching stops working correctly. "Explain the Terraform code" contains the word "Terraform" but is clearly a follow-up question, not a new generation request. So in active sessions, we switch to a full intent classifier that distinguishes `new_generation`, `follow_up`, and `off_topic`.
 
-![InfraSquad handling an off-topic query -- the guardrail returns a helpful explanation without triggering the pipeline](https://sectumpsempra.github.io/assets/images/infrasquad/handling_off_topic_query.png)
+![InfraSquad handling an off-topic query-the guardrail returns a helpful explanation without triggering the pipeline](https://sectumpsempra.github.io/assets/images/infrasquad/handling_off_topic_query.png)
 
 ---
 
@@ -203,12 +203,12 @@ Two independent checks. Neither relying on the other being correct.
 
 ## The HCL Guardrail: Before Security Even Runs
 
-Before the Terraform reaches the Security Auditor, it passes through a deterministic validator. This runs on every generation -- first pass and every remediation:
+Before the Terraform reaches the Security Auditor, it passes through a deterministic validator. This runs on every generation-first pass and every remediation:
 
 ```python
 _FORBIDDEN_PATTERNS = [
     (r"AdministratorAccess", "Uses AdministratorAccess IAM policy"),
-    (r"0\.0\.0\.0/0",        "Contains 0.0.0.0/0 CIDR -- opens resource to the internet"),
+    (r"0\.0\.0\.0/0",        "Contains 0.0.0.0/0 CIDR-opens resource to the internet"),
     (r"public\s*=\s*true",   "Sets public access to true"),
 ]
 ```
@@ -231,11 +231,7 @@ After the security check passes, the Visualizer reads the finalized plan and cod
 
 ![InfraSquad UI showing the generated Mermaid architecture diagram as source and rendered PNG](https://sectumpsempra.github.io/assets/images/infrasquad/response_with_mermaid_diagram.png)
 
-If `mmdc` is installed, the Mermaid source renders directly to PNG:
-
-![Rendered architecture diagram -- VPC, ALB, EC2 Auto Scaling Group, RDS Multi-AZ, ElastiCache, and S3 as a flowchart](https://sectumpsempra.github.io/assets/images/infrasquad/architecture_diagram.png)
-
-If `mmdc` is not installed, the Mermaid source is saved as-is. It is still fully useful -- paste it into any Mermaid viewer and you get the diagram.
+If `mmdc` is not installed, the Mermaid source is saved as-is. It is still fully useful-paste it into any Mermaid viewer and you get the diagram.
 
 ---
 
@@ -244,7 +240,7 @@ If `mmdc` is not installed, the Mermaid source is saved as-is. It is still fully
 When the Security Auditor finds issues, it does not just list them. It produces a structured prompt that becomes the DevOps agent's next input:
 
 ```
-MANDATORY SECURITY REMEDIATION -- 3 finding(s)
+MANDATORY SECURITY REMEDIATION-3 finding(s)
 Fix EVERY numbered item below. Do NOT skip any.
 
 Finding 1. [HIGH] AVD-AWS-0107 - aws_security_group.app_sg
@@ -369,4 +365,4 @@ Full source: [infrasquad - github](https://github.com/Andela-AI-Engineering-Boot
 
 Built at [Andela AI Engineering Bootcamp](https://help.andela.com/hc/en-us/articles/48808339012115-Welcome-to-the-AI-Engineering-Bootcamp) by [Amit](https://linkedin.com/in/amit-bhatt), Ayesha, Elijah, Joel, Stella, and Adetayo.
 
-If you are building anything with [LangGraph](https://github.com/langchain-ai/langgraph), multi-agent pipelines, or IaC automation, drop a comment. Especially curious whether anyone else hit the public ALB infinite loop case -- and how you handled it.
+If you are building anything with [LangGraph](https://github.com/langchain-ai/langgraph), multi-agent pipelines, or IaC automation, drop a comment. Especially curious whether anyone else hit the public ALB infinite loop case-and how you handled it.
