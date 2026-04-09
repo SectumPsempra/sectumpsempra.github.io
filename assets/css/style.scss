@@ -196,3 +196,169 @@ strong {
     font-size: 16px;
   }
 }
+
+// ── Landing page — blog intro ────────────────────────────────
+.blog-intro {
+  text-align: center;
+  font-size: 1.05rem;
+  color: #57606a;
+  margin: 0 auto 2.75rem;
+  max-width: 44rem;
+  line-height: 1.75;
+}
+
+// ── Landing page — post grid ─────────────────────────────────
+.post-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(290px, 1fr));
+  gap: 1.75rem;
+}
+
+// ── Post card ────────────────────────────────────────────────
+.post-card {
+  background: #ffffff;
+  border: 1px solid #d0d7de;
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+  transition: transform 0.22s ease, box-shadow 0.22s ease, border-color 0.22s ease;
+  display: flex;
+  flex-direction: column;
+}
+
+.post-card:hover {
+  transform: translateY(-5px);
+  box-shadow: 0 10px 32px rgba(0, 0, 0, 0.10);
+  border-color: #b0bec5;
+}
+
+.card-image-wrap {
+  display: block;
+  overflow: hidden;
+  aspect-ratio: 16 / 9;
+  background: #f6f8fa;
+  border-bottom: none;
+}
+
+// Override the global img styles inside cards
+.card-image {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transition: transform 0.35s ease;
+  display: block;
+  border-radius: 0 !important;
+  border: none !important;
+  box-shadow: none !important;
+  margin: 0 !important;
+}
+
+.post-card:hover .card-image {
+  transform: scale(1.04);
+}
+
+.card-body {
+  padding: 1.35rem 1.5rem 1.6rem;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+}
+
+// ── Tag pills ────────────────────────────────────────────────
+.card-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-bottom: 0.85rem;
+}
+
+.tag {
+  display: inline-block;
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  padding: 0.2rem 0.55rem;
+  border-radius: 4px;
+  text-transform: uppercase;
+  line-height: 1.5;
+}
+
+.tag-local   { background: #dbeafe; color: #1d4ed8; }
+.tag-privacy { background: #dcfce7; color: #15803d; }
+.tag-metal   { background: #fef3c7; color: #92400e; }
+.tag-agents  { background: #ede9fe; color: #6d28d9; }
+.tag-iac     { background: #e0f2fe; color: #0369a1; }
+.tag-devops  { background: #fff7ed; color: #c2410c; }
+
+// ── Card title — override the global h2 rule ─────────────────
+.card-title {
+  font-size: 1.15rem !important;
+  font-weight: 700 !important;
+  margin: 0 0 0.4rem !important;
+  padding-bottom: 0 !important;
+  border-bottom: none !important;
+  line-height: 1.35 !important;
+  color: #0d1117 !important;
+  margin-top: 0 !important;
+}
+
+.card-title a {
+  color: #0d1117 !important;
+  text-decoration: none;
+  border-bottom: none !important;
+}
+
+.card-title a:hover {
+  color: #0969da !important;
+  border-bottom: none !important;
+}
+
+// ── Card meta (read time / stack) ─────────────────────────────
+.card-meta {
+  font-size: 0.76rem;
+  color: #8c959f;
+  margin: 0 0 0.75rem;
+  line-height: 1.4;
+}
+
+// ── Card excerpt ─────────────────────────────────────────────
+.card-excerpt {
+  font-size: 0.875rem;
+  color: #57606a;
+  line-height: 1.65;
+  margin: 0 0 1.3rem;
+  flex: 1;
+}
+
+// ── Read button ──────────────────────────────────────────────
+.read-btn {
+  display: inline-flex;
+  align-items: center;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: #0969da;
+  text-decoration: none;
+  border: 1.5px solid #0969da;
+  border-radius: 6px;
+  padding: 0.45rem 1.05rem;
+  transition: background 0.18s ease, color 0.18s ease;
+  align-self: flex-start;
+  line-height: 1;
+}
+
+.read-btn:hover {
+  background: #0969da;
+  color: #ffffff !important;
+  border-bottom: 1.5px solid #0969da !important;
+}
+
+// ── Responsive: stack cards on narrow screens ─────────────────
+@media screen and (max-width: 42em) {
+  .post-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .blog-intro {
+    font-size: 0.95rem;
+  }
+}

@@ -1,4 +1,4 @@
 theme: jekyll-theme-cayman
-title: "Severing the API Cord"
-description: "How I Built a Fully Offline 26B AI Coding Agent on my M1 Mac"
+title: "AI Engineering"
+description: "Deep dives on building real systems with AI — from Apple Silicon inference to production multi-agent pipelines."
 show_downloads: false
