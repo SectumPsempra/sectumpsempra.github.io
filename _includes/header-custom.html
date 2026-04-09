@@ -1,0 +1,84 @@
+<nav class="site-nav" aria-label="Blog posts">
+  <a href="/" class="nav-pill" data-path="/">
+    <span class="nav-icon">⚡</span> Severing the API Cord
+  </a>
+  <a href="/infrasquad/" class="nav-pill" data-path="/infrasquad/">
+    <span class="nav-icon">🤖</span> InfraSquad
+  </a>
+</nav>
+
+<style>
+  .site-nav {
+    display: flex;
+    gap: 0.65rem;
+    margin-top: 1.75rem;
+    flex-wrap: wrap;
+    justify-content: center;
+    align-items: center;
+  }
+
+  .nav-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.42rem 1.15rem;
+    border: 2px solid rgba(255, 255, 255, 0.55);
+    border-radius: 2rem;
+    color: rgba(255, 255, 255, 0.88) !important;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    font-size: 0.82rem;
+    font-weight: 500;
+    letter-spacing: 0.01em;
+    text-decoration: none !important;
+    transition: background 0.18s ease, color 0.18s ease, border-color 0.18s ease,
+                box-shadow 0.18s ease;
+    cursor: pointer;
+  }
+
+  .nav-pill:hover {
+    background: rgba(255, 255, 255, 0.18);
+    border-color: rgba(255, 255, 255, 0.85);
+    color: #ffffff !important;
+    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.15);
+  }
+
+  .nav-pill.active {
+    background: rgba(255, 255, 255, 0.96);
+    border-color: rgba(255, 255, 255, 0.96);
+    color: #155799 !important;
+    font-weight: 600;
+    box-shadow: 0 2px 16px rgba(0, 0, 0, 0.18);
+  }
+
+  .nav-pill.active:hover {
+    background: #ffffff;
+    color: #155799 !important;
+  }
+
+  .nav-icon {
+    font-size: 0.78rem;
+    line-height: 1;
+  }
+
+  /* Give the hero image on the InfraSquad page a polished look */
+  .main-content img:first-of-type {
+    width: 100%;
+    max-width: 100%;
+    border-radius: 8px;
+    margin-bottom: 1.5rem;
+    box-shadow: 0 4px 24px rgba(0, 0, 0, 0.12);
+    display: block;
+  }
+</style>
+
+<script>
+  (function () {
+    var path = window.location.pathname.replace(/\/$/, '') || '/';
+    document.querySelectorAll('.nav-pill').forEach(function (link) {
+      var target = (link.getAttribute('data-path') || '/').replace(/\/$/, '') || '/';
+      if (path === target) {
+        link.classList.add('active');
+      }
+    });
+  })();
+</script>
